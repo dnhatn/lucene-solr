@@ -526,21 +526,25 @@ public final class CompressingStoredFieldsWriter extends StoredFieldsWriter {
     final FieldsIndexReader index = (FieldsIndexReader) reader.getIndexReader();
 
     // copy docs that belong to the previous chunk
-    if (docID > 0) {
-      // if docID does not start a new chunk, then we need to copy doc by doc.
-      final Bits liveDocs = mergeState.liveDocs[readerIndex];
-      if (reader.isLoaded(docID) == false
-          && liveDocs != null && liveDocs.get(docID) == false
-          && index.getStartPointer(docID - 1) == index.getStartPointer(docID)) {
+    while (docID < toDocID && reader.isLoaded(docID)) {
+      copyOneDoc(reader, docID++);
+    }
+    if (docID >= toDocID) {
+      return;
+    }
+
+    // Should copy doc by doc instead?
+    if (numBufferedDocs > 0) {
+      final long remainingDocs = toDocID - docID;
+      final long totalEstimatedSize = bufferedDocs.size() + (bufferedDocs.size() * remainingDocs / numBufferedDocs);
+      if (totalEstimatedSize < chunkSize * 0.8 && numBufferedDocs + remainingDocs < maxDocsPerChunk) {
+        while (docID < toDocID) {
           copyOneDoc(reader, docID++);
-      }
-      while (docID < toDocID && reader.isLoaded(docID)) {
-        copyOneDoc(reader, docID++);
-      }
-      if (docID >= toDocID) {
+        }
         return;
       }
     }
+
     // copy chunks
     long fromPointer = index.getStartPointer(docID);
     final long toPointer = toDocID == maxDoc ? reader.getMaxPointer() : index.getStartPointer(toDocID);
@@ -606,7 +610,7 @@ public final class CompressingStoredFieldsWriter extends StoredFieldsWriter {
     for (int i = 0; i < mergeState.storedFieldsReaders.length; i++) {
       final StoredFieldsReader reader = mergeState.storedFieldsReaders[i];
       reader.checkIntegrity();
-      MergeStrategy mergeStrategy = getMergeStrategy(reader, matching.matchingReaders[i]);
+      MergeStrategy mergeStrategy = getMergeStrategy(mergeState, matching, i);
       subs.add(new CompressingStoredFieldsMergeSub(mergeState, mergeStrategy, i));
       if (mergeStrategy == MergeStrategy.VISITOR) {
         visitors[i] = new MergeVisitor(mergeState, i);
@@ -623,12 +627,6 @@ public final class CompressingStoredFieldsWriter extends StoredFieldsWriter {
         final CompressingStoredFieldsMergeSub current = sub;
         final int fromDocID = sub.docID;
         int toDocID = fromDocID;
-        // fast advance
-        if (mergeState.needsIndexSort == false && mergeState.liveDocs[sub.readerIndex] == null) {
-          assert toDocID == 0;
-          sub.docID = sub.maxDoc - 1;
-          toDocID = sub.docID;
-        }
         while ((sub = docIDMerger.next()) == current && sub.docID == toDocID + 1) {
           ++toDocID;
         }
@@ -673,10 +671,11 @@ public final class CompressingStoredFieldsWriter extends StoredFieldsWriter {
     VISITOR
   }
 
-  private MergeStrategy getMergeStrategy(StoredFieldsReader candidate, boolean matchingFieldInfos) {
+  private MergeStrategy getMergeStrategy(MergeState mergeState, MatchingReaders matchingReaders, int readerIndex) {
+    final StoredFieldsReader candidate = mergeState.storedFieldsReaders[readerIndex];
     if (candidate instanceof CompressingStoredFieldsReader == false
         || ((CompressingStoredFieldsReader) candidate).getVersion() != VERSION_CURRENT
-        || matchingFieldInfos == false) {
+        || matchingReaders.matchingReaders[readerIndex] == false) {
       return MergeStrategy.VISITOR;
     }
     CompressingStoredFieldsReader reader = (CompressingStoredFieldsReader) candidate;
@@ -685,6 +684,7 @@ public final class CompressingStoredFieldsWriter extends StoredFieldsWriter {
         && reader.getCompressionMode() == compressionMode
         && reader.getChunkSize() == chunkSize
         && reader.getPackedIntsVersion() == PackedInts.VERSION_CURRENT
+        && mergeState.liveDocs[readerIndex] == null
         && !tooDirty(reader)) {
       return MergeStrategy.BULK;
     } else {
