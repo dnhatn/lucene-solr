@@ -533,18 +533,6 @@ public final class CompressingStoredFieldsWriter extends StoredFieldsWriter {
       return;
     }
 
-    // Should copy doc by doc instead?
-    if (numBufferedDocs > 0) {
-      final long remainingDocs = toDocID - docID;
-      final long totalEstimatedSize = bufferedDocs.size() + (bufferedDocs.size() * remainingDocs / numBufferedDocs);
-      if (totalEstimatedSize < chunkSize * 0.8 && numBufferedDocs + remainingDocs < maxDocsPerChunk) {
-        while (docID < toDocID) {
-          copyOneDoc(reader, docID++);
-        }
-        return;
-      }
-    }
-
     // copy chunks
     long fromPointer = index.getStartPointer(docID);
     final long toPointer = toDocID == maxDoc ? reader.getMaxPointer() : index.getStartPointer(toDocID);
