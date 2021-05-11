@@ -626,8 +626,10 @@ public final class CompressingStoredFieldsWriter extends StoredFieldsWriter {
       if (sub.strategy == MergeStrategy.BULK) {
         final CompressingStoredFieldsMergeSub current = sub;
         final int fromDocID = sub.docID;
+        // TODO: num docs?
         int toDocID = fromDocID;
-        while ((sub = docIDMerger.next()) == current && sub.docID == toDocID + 1) {
+        while ((sub = docIDMerger.next()) == current) {
+          assert toDocID + 1 == sub.docID;
           ++toDocID;
         }
         ++toDocID; // exclusive bound
